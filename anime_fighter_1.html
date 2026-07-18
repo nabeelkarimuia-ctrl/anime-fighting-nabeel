@@ -1,0 +1,564 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Anime Clash: Rise of the Bosses</title>
+<style>
+  body { margin:0; background:#111; display:flex; flex-direction:column; align-items:center; font-family:'Trebuchet MS', sans-serif; color:#fff; }
+  #wrap { position:relative; margin-top:14px; }
+  canvas { background:#000; border:3px solid #444; border-radius:8px; display:block; }
+  h1 { margin:10px 0 2px; letter-spacing:1px; text-shadow:0 0 10px #f0f; }
+  #hint { color:#aaa; font-size:13px; margin-bottom:6px; }
+  .overlay {
+    position:absolute; top:0; left:0; width:100%; height:100%;
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    background:rgba(0,0,0,0.85); border-radius:8px; text-align:center;
+  }
+  .hidden { display:none; }
+  .char-card {
+    display:inline-block; margin:5px; padding:8px 6px; border-radius:8px;
+    border:2px solid #555; cursor:pointer; width:96px; transition:0.15s; vertical-align:top;
+  }
+  #rosterList { display:flex; flex-wrap:wrap; justify-content:center; }
+  .char-card:hover { transform:scale(1.06); }
+  button {
+    margin-top:14px; padding:10px 22px; font-size:16px; border-radius:6px;
+    border:none; cursor:pointer; background:#e63cff; color:#fff; font-weight:bold;
+  }
+  button:hover { background:#ff5cff; }
+</style>
+</head>
+<body>
+<h1>⚔ ANIME CLASH: RISE OF THE BOSSES ⚔</h1>
+<div id="hint">Move: A / D &nbsp; Jump: W &nbsp; Punch: J &nbsp; Kick: K &nbsp; Special: L (needs full meter) &nbsp; Block: hold S</div>
+<div id="wrap">
+<canvas id="game" width="800" height="400"></canvas>
+<button id="inGameBack" onclick="backToSelect()" style="position:absolute; top:8px; right:8px; padding:5px 10px; font-size:12px; background:#000a; border:1px solid #888;">⏪ Back</button>
+
+<div id="selectScreen" class="overlay">
+  <h2>Choose your fighter <small style="font-size:13px; color:#aaa;">(100 fighters)</small></h2>
+  <input id="rosterSearch" placeholder="Search fighters..." oninput="renderRoster()"
+    style="width:260px; padding:6px 10px; border-radius:6px; border:1px solid #555; background:#222; color:#fff; margin-bottom:10px;">
+  <div id="rosterList" style="max-width:640px; max-height:280px; overflow-y:auto; padding:4px;"></div>
+</div>
+
+<div id="levelScreen" class="overlay hidden">
+  <h2 id="levelTitle">Level 1</h2>
+  <p id="levelDesc"></p>
+  <div>
+    <button onclick="startFight()">Fight!</button>
+    <button onclick="backToSelect()" style="background:#555;">Back to fighter select</button>
+  </div>
+</div>
+
+<div id="endScreen" class="overlay hidden">
+  <h2 id="endTitle"></h2>
+  <p id="endDesc"></p>
+  <button id="endBtn" onclick="onEndClick()"></button>
+</div>
+</div>
+
+<script>
+const cv = document.getElementById('game');
+const ctx = cv.getContext('2d');
+const GROUND = 340;
+
+const CHARACTERS = [
+  { name:"Kaze Amano", color:"#4de3c8", dark:"#1f7a68", speed:4.2, punch:8, kick:10, special:30, maxHp:100, specialType:"slash", tag:"Breath-style swordsman" },
+  { name:"Kuro Ibaraki", color:"#8844ff", dark:"#4a2299", speed:3.4, punch:9, kick:11, special:34, maxHp:100, specialType:"domain", tag:"Cursed energy user" },
+  { name:"Volt Kagami", color:"#ffd400", dark:"#a68900", speed:4.8, punch:7, kick:9, special:24, maxHp:92, specialType:"lightning", tag:"Lightning quirk hero" },
+  { name:"Captain Rekku", color:"#ff5544", dark:"#992a1f", speed:3.6, punch:10, kick:12, special:28, maxHp:108, specialType:"stretch", tag:"Rubber-armed pirate" },
+  { name:"Kaito", color:"#3ca7ff", dark:"#1a5a99", speed:4, punch:8, kick:11, special:26, maxHp:100, specialType:"burst", tag:"Balanced striker" },
+  { name:"Sora",  color:"#ff4d9d", dark:"#992255", speed:5.5, punch:7, kick:9, special:22, maxHp:90, specialType:"burst", tag:"Fast & aggressive" }
+];
+
+// --- procedural roster generation (seeded, so it's stable across reloads) ---
+function mulberry32(seed){
+  return function(){
+    seed |= 0; seed = seed + 0x6D2B79F5 | 0;
+    let t = Math.imul(seed ^ seed >>> 15, 1 | seed);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+function hslToHex(h,s,l){
+  s/=100; l/=100;
+  const k = n => (n + h/30) % 12;
+  const a = s * Math.min(l, 1-l);
+  const f = n => l - a * Math.max(-1, Math.min(k(n)-3, Math.min(9-k(n),1)));
+  const toHex = x => Math.round(255*x).toString(16).padStart(2,'0');
+  return '#' + toHex(f(0)) + toHex(f(8)) + toHex(f(4));
+}
+const FIRST_NAMES = ["Ren","Aki","Toma","Yui","Haru","Riko","Sen","Mika","Kai","Nao",
+  "Ryo","Emi","Taku","Sana","Kenji","Airi","Sho","Tsuki","Daichi","Hana",
+  "Ikki","Mei","Jin","Nori","Kuro","Yuma","Chika","Sato","Rin","Gen"];
+const LAST_NAMES = ["Shiroi","Tategami","Kurenai","Hoshizora","Ryujin","Kagami","Fubuki","Amaya",
+  "Tsukikage","Ginryu","Enkai","Kirisame","Shirogane","Zangetsu","Kazane","Hinode",
+  "Onibi","Suzune","Getsuei","Raikou"];
+const TAGS_BY_TYPE = {
+  slash: "Blade technique specialist",
+  domain: "Cursed energy user",
+  lightning: "Elemental quirk fighter",
+  stretch: "Elastic-limb brawler",
+  burst: "All-round striker"
+};
+const SPECIAL_TYPES = ["slash","domain","lightning","stretch","burst"];
+
+const rand = mulberry32(1337);
+const usedNames = new Set(CHARACTERS.map(c=>c.name));
+for (let i = 0; i < 94; i++){
+  let name;
+  do {
+    name = FIRST_NAMES[Math.floor(rand()*FIRST_NAMES.length)] + " " + LAST_NAMES[Math.floor(rand()*LAST_NAMES.length)];
+  } while (usedNames.has(name));
+  usedNames.add(name);
+  const hue = Math.floor(rand()*360);
+  const color = hslToHex(hue, 65, 58);
+  const dark = hslToHex(hue, 65, 30);
+  const specialType = SPECIAL_TYPES[i % SPECIAL_TYPES.length];
+  CHARACTERS.push({
+    name, color, dark,
+    speed: +(3 + rand()*3).toFixed(1),
+    punch: 6 + Math.floor(rand()*6),
+    kick: 8 + Math.floor(rand()*7),
+    special: 20 + Math.floor(rand()*18),
+    maxHp: 85 + Math.floor(rand()*40),
+    specialType,
+    tag: TAGS_BY_TYPE[specialType]
+  });
+}
+
+function renderRoster(){
+  const q = document.getElementById('rosterSearch').value.toLowerCase();
+  const list = document.getElementById('rosterList');
+  list.innerHTML = '';
+  CHARACTERS.forEach((c, i) => {
+    if (q && !c.name.toLowerCase().includes(q)) return;
+    const div = document.createElement('div');
+    div.className = 'char-card';
+    div.style.borderColor = c.color;
+    div.onclick = () => selectChar(i);
+    div.innerHTML = '<div style="width:20px;height:20px;border-radius:50%;background:' + c.color + ';margin:0 auto 4px;"></div>' +
+      '<b style="color:' + c.color + '; font-size:12px;">' + c.name + '</b><br>' +
+      '<small style="font-size:10px; color:#aaa;">' + c.tag + '</small>';
+    list.appendChild(div);
+  });
+}
+renderRoster();
+
+const BOSSES = [
+  { name:"Rookie Ronin", color:"#88cc55", hp:70, dmg:5, speed:2.2, aggro:0.010 },
+  { name:"Crimson Blade", color:"#ff8844", hp:100, dmg:7, speed:2.8, aggro:0.014 },
+  { name:"Void Empress", color:"#8844ff", hp:135, dmg:9, speed:3.3, aggro:0.018 },
+  { name:"Iron Titan", color:"#cccccc", hp:170, dmg:11, speed:3.6, aggro:0.022 },
+  { name:"Eclipse Dragon King", color:"#ff2266", hp:220, dmg:14, speed:4.2, aggro:0.028 }
+];
+
+let level = 0;
+let playerIdx = 0;
+let player, boss;
+let keys = {};
+let particles = [];
+let gameActive = false;
+
+function makeFighter(x, facing, statTemplate, isBoss) {
+  return {
+    x, y: GROUND, vy:0, w:46, h:90, facing,
+    hp: isBoss ? statTemplate.hp : statTemplate.maxHp,
+    maxHp: isBoss ? statTemplate.hp : statTemplate.maxHp,
+    meter: 0, state:'idle', stateTimer:0, cooldown:0,
+    color: statTemplate.color, dark: statTemplate.dark || shade(statTemplate.color),
+    speed: statTemplate.speed, blocking:false, hitFlash:0,
+    isBoss, aiTimer:0, stat: statTemplate
+  };
+}
+function shade(hex){ return hex; }
+
+function backToSelect(){
+  gameActive = false;
+  level = 0;
+  document.getElementById('levelScreen').classList.add('hidden');
+  document.getElementById('endScreen').classList.add('hidden');
+  document.getElementById('selectScreen').classList.remove('hidden');
+}
+
+function selectChar(i){
+  playerIdx = i;
+  document.getElementById('selectScreen').classList.add('hidden');
+  showLevelScreen();
+}
+
+function showLevelScreen(){
+  const b = BOSSES[level];
+  document.getElementById('levelTitle').textContent = "Level " + (level+1) + " — vs " + b.name;
+  document.getElementById('levelDesc').textContent = "Boss HP: " + b.hp + " | Get ready!";
+  document.getElementById('levelScreen').classList.remove('hidden');
+}
+
+function startFight(){
+  document.getElementById('levelScreen').classList.add('hidden');
+  const cstat = CHARACTERS[playerIdx];
+  player = makeFighter(150, 1, cstat, false);
+  boss = makeFighter(600, -1, BOSSES[level], true);
+  particles = [];
+  gameActive = true;
+  requestAnimationFrame(loop);
+}
+
+function onEndClick(){
+  document.getElementById('endScreen').classList.add('hidden');
+  if (level >= BOSSES.length) {
+    level = 0;
+    document.getElementById('selectScreen').classList.remove('hidden');
+  } else {
+    showLevelScreen();
+  }
+}
+
+function endFight(won){
+  gameActive = false;
+  const scr = document.getElementById('endScreen');
+  const btn = document.getElementById('endBtn');
+  if (won) {
+    level++;
+    document.getElementById('endTitle').textContent = "Victory!";
+    if (level >= BOSSES.length) {
+      document.getElementById('endDesc').textContent = "You defeated every boss! You are the champion.";
+      btn.textContent = "Play again";
+    } else {
+      document.getElementById('endDesc').textContent = "On to level " + (level+1) + "...";
+      btn.textContent = "Continue";
+    }
+  } else {
+    document.getElementById('endTitle').textContent = "Defeated...";
+    document.getElementById('endDesc').textContent = "Try again against " + BOSSES[level].name + "!";
+    btn.textContent = "Retry";
+  }
+  scr.classList.remove('hidden');
+}
+
+document.addEventListener('keydown', e => keys[e.key.toLowerCase()] = true);
+document.addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
+
+function attackHits(a, b, range){
+  return Math.abs(a.x - b.x) < range && a.stateTimer > 4 && a.stateTimer < 14;
+}
+
+function doDamage(attacker, defender, dmg, isSpecial){
+  if (defender.blocking) {
+    dmg = Math.floor(dmg * 0.2);
+    spawnParticles(defender.x, defender.y-60, '#88ccff', 6);
+  } else {
+    spawnParticles(defender.x, defender.y-60, isSpecial ? '#ffea00' : '#ff5555', isSpecial ? 18 : 8);
+  }
+  defender.hp = Math.max(0, defender.hp - dmg);
+  defender.hitFlash = 8;
+  if (!attacker.isBoss) attacker.meter = Math.min(100, attacker.meter + (isSpecial?0:8));
+}
+
+function spawnParticles(x,y,color,n){
+  for(let i=0;i<n;i++){
+    particles.push({x,y,vx:(Math.random()-0.5)*6,vy:(Math.random()-1.2)*5,life:24,color});
+  }
+}
+
+function updateFighter(f, opponent, isPlayer){
+  if (f.hitFlash>0) f.hitFlash--;
+  f.facing = f.x < opponent.x ? 1 : -1;
+
+  if (isPlayer){
+    f.blocking = keys['s'] && f.state==='idle';
+    if (f.state==='idle' && !f.blocking){
+      if (keys['a']) f.x -= f.speed;
+      if (keys['d']) f.x += f.speed;
+      if (keys['w'] && f.y >= GROUND) f.vy = -13;
+      if (keys['j']) { f.state='punch'; f.stateTimer=0; }
+      else if (keys['k']) { f.state='kick'; f.stateTimer=0; }
+      else if (keys['l'] && f.meter>=100) { f.state='special'; f.stateTimer=0; f.meter=0; }
+    }
+  } else {
+    // simple AI
+    f.aiTimer--;
+    const dist = Math.abs(f.x - opponent.x);
+    if (f.state==='idle'){
+      f.blocking = Math.random() < 0.003;
+      if (dist > 70) {
+        f.x += f.facing * f.speed * 0.6;
+        f.blocking=false;
+      } else if (f.aiTimer<=0) {
+        const r = Math.random();
+        if (r < f.stat.aggro*40) { f.state='special_wait'; f.stateTimer=0; }
+        else if (r < 0.55) { f.state='punch'; f.stateTimer=0; }
+        else { f.state='kick'; f.stateTimer=0; }
+        f.aiTimer = 30 + Math.random()*30;
+      }
+    }
+  }
+
+  f.x = Math.max(30, Math.min(770, f.x));
+  f.y += f.vy;
+  f.vy += 0.7;
+  if (f.y > GROUND){ f.y = GROUND; f.vy = 0; }
+
+  if (f.state !== 'idle'){
+    f.stateTimer++;
+    let dur = f.state==='punch' ? 16 : f.state==='kick' ? 20 : f.state==='special' ? 34 : f.state==='special_wait' ? 30 : 16;
+    if (f.state==='special_wait' && f.stateTimer>=dur){ f.state='special'; f.stateTimer=0; dur=34; }
+    else if (f.stateTimer >= dur){ f.state='idle'; f.stateTimer=0; }
+  }
+}
+
+function checkAttacks(){
+  [[player,boss],[boss,player]].forEach(([a,b])=>{
+    if ((a.state==='punch' || a.state==='kick') && attackHits(a,b,70) && a.stateTimer===8 && b.hp>0){
+      const dmg = a.isBoss ? a.stat.dmg : (a.state==='punch'?a.stat.punch:a.stat.kick);
+      doDamage(a,b,dmg,false);
+    }
+    if (a.state==='special' && a.stateTimer===16 && Math.abs(a.x-b.x)<120 && b.hp>0){
+      const dmg = a.isBoss ? a.stat.dmg*2 : a.stat.special;
+      doDamage(a,b,dmg,true);
+    }
+  });
+}
+
+function drawLimb(originX, originY, ang1, len1, ang2, len2, width, color){
+  ctx.save();
+  ctx.translate(originX, originY);
+  ctx.rotate(ang1);
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.roundRect(-width/2, 0, width, len1, width/2);
+  ctx.fill();
+  ctx.translate(0, len1);
+  ctx.rotate(ang2);
+  ctx.beginPath();
+  ctx.roundRect(-width/2, 0, width, len2, width/2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawFighter(f){
+  ctx.save();
+  const flash = f.hitFlash>0 && f.hitFlash%4<2;
+  const mainColor = flash ? '#ffffff' : f.color;
+  const shadeColor = flash ? '#eeeeee' : (f.dark || f.color);
+  const facing = f.facing;
+  const jumping = f.y < GROUND - 4;
+  const kicking = f.state==='kick' && f.stateTimer>1 && f.stateTimer<18;
+  const punching = f.state==='punch' && f.stateTimer>1 && f.stateTimer<14;
+  const special = f.state==='special';
+  const hipY = f.y - 40;
+  const shoulderY = f.y - 78;
+  const cx = f.x;
+
+  // --- LEGS ---
+  let frontHip=0.05, frontKnee=0.05, backHip=-0.05, backKnee=0.05;
+  if (kicking){
+    const p = Math.min(1, f.stateTimer/9);
+    frontHip = facing * (1.3*p);
+    frontKnee = -0.9*p;
+    backHip = -facing*0.15;
+  } else if (jumping){
+    frontHip = -facing*0.5; frontKnee = 0.9;
+    backHip = facing*0.35; backKnee = 0.6;
+  }
+  // back leg first (behind body)
+  drawLimb(cx - facing*3, hipY, Math.PI + backHip*facing, 22, backKnee*facing, 20, 11, shadeColor);
+  // body/torso
+  ctx.fillStyle = mainColor;
+  ctx.beginPath();
+  ctx.roundRect(cx-15, shoulderY, 30, hipY-shoulderY+6, 8);
+  ctx.fill();
+  // head
+  ctx.beginPath();
+  ctx.arc(cx, shoulderY-13, 13, 0, Math.PI*2);
+  ctx.fill();
+  // simple face direction dot
+  ctx.fillStyle = '#1a1a1a';
+  ctx.beginPath();
+  ctx.arc(cx + facing*5, shoulderY-14, 2, 0, Math.PI*2);
+  ctx.fill();
+  // front leg (in front of body)
+  drawLimb(cx + facing*3, hipY, Math.PI + frontHip*facing, 22, frontKnee*facing, 20, 11, mainColor);
+
+  // --- ARMS ---
+  let backShoulder=0.25, backElbow=0.3, frontShoulder=0.2, frontElbow=0.3;
+  if (punching){
+    const p = Math.min(1, f.stateTimer/8);
+    frontShoulder = facing*(1.5*p);
+    frontElbow = -0.1;
+    backShoulder = -facing*0.2;
+  } else if (kicking || jumping){
+    frontShoulder = -facing*0.3; backShoulder = facing*0.3;
+  } else if (special){
+    frontShoulder = -facing*1.6; frontElbow = -0.2;
+    backShoulder = facing*1.6; backElbow = 0.2;
+  }
+  drawLimb(cx - facing*10, shoulderY+4, Math.PI + backShoulder*facing, 18, backElbow*facing, 16, 8, shadeColor);
+  drawLimb(cx + facing*10, shoulderY+4, Math.PI + frontShoulder*facing, 18, frontElbow*facing, 16, 8, mainColor);
+  ctx.fillStyle = mainColor;
+  if (f.state==='special' && f.stateTimer<30){
+    const t = f.stateTimer;
+    const type = (f.stat && f.stat.specialType) || 'burst';
+    ctx.save();
+    if (type === 'slash'){
+      ctx.strokeStyle = '#a8fff0';
+      ctx.lineWidth = 6;
+      ctx.globalAlpha = Math.max(0, 1 - t/24);
+      ctx.beginPath();
+      const len = 90 + t*3;
+      ctx.moveTo(f.x + f.facing*10, f.y-100);
+      ctx.lineTo(f.x + f.facing*(10+len), f.y-40);
+      ctx.stroke();
+    } else if (type === 'domain'){
+      ctx.globalAlpha = 0.35;
+      ctx.fillStyle = '#1a0033';
+      ctx.beginPath();
+      ctx.arc(f.x, f.y-60, 20+t*5, 0, Math.PI*2);
+      ctx.fill();
+      ctx.globalAlpha = 0.7;
+      ctx.strokeStyle = '#c090ff';
+      ctx.lineWidth = 3;
+      ctx.stroke();
+    } else if (type === 'lightning'){
+      ctx.strokeStyle = '#fff58a';
+      ctx.lineWidth = 4;
+      ctx.globalAlpha = Math.random() < 0.7 ? 1 : 0.3;
+      ctx.beginPath();
+      let bx = f.x + f.facing*10, by = f.y-100;
+      ctx.moveTo(bx,by);
+      for(let i=0;i<5;i++){
+        bx += f.facing*22; by += 12;
+        ctx.lineTo(bx + (Math.random()-0.5)*10, by);
+      }
+      ctx.stroke();
+    } else if (type === 'stretch'){
+      ctx.fillStyle = '#ff9988';
+      ctx.globalAlpha = 0.9;
+      const len = Math.min(t*14, 260);
+      ctx.fillRect(f.x + (f.facing>0?16:-16-len), f.y-70, len, 12);
+    } else {
+      ctx.globalAlpha = 0.5;
+      ctx.fillStyle = '#ffea00';
+      ctx.beginPath();
+      ctx.arc(f.x, f.y-60, 30+t, 0, Math.PI*2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+  if (f.blocking){
+    ctx.fillStyle='rgba(120,180,255,0.5)';
+    ctx.fillRect(f.x-20,f.y-90,40,70);
+  }
+  ctx.restore();
+}
+
+function drawParticles(){
+  particles.forEach(p=>{
+    ctx.fillStyle = p.color;
+    ctx.globalAlpha = p.life/24;
+    ctx.fillRect(p.x, p.y, 4,4);
+    ctx.globalAlpha = 1;
+    p.x += p.vx; p.y += p.vy; p.vy += 0.2; p.life--;
+  });
+  particles = particles.filter(p=>p.life>0);
+}
+
+function drawBar(x,y,w,h,pct,fillColor,label){
+  ctx.fillStyle = '#222';
+  ctx.fillRect(x,y,w,h);
+  ctx.fillStyle = fillColor;
+  ctx.fillRect(x,y,w*Math.max(0,pct),h);
+  ctx.strokeStyle = '#000';
+  ctx.strokeRect(x,y,w,h);
+  ctx.fillStyle = '#fff';
+  ctx.font = '12px sans-serif';
+  ctx.fillText(label, x, y-4);
+}
+
+function loop(){
+  if (!gameActive) return;
+  updateFighter(player, boss, true);
+  updateFighter(boss, player, false);
+  checkAttacks();
+
+  // background - anime-style outdoor arena
+  const sky = ctx.createLinearGradient(0,0,0,GROUND);
+  sky.addColorStop(0, '#7ec8ff');
+  sky.addColorStop(0.6, '#bfe8ff');
+  sky.addColorStop(1, '#fdf3d0');
+  ctx.fillStyle = sky;
+  ctx.fillRect(0,0,800,GROUND);
+
+  // sun
+  ctx.fillStyle = 'rgba(255,250,200,0.9)';
+  ctx.beginPath(); ctx.arc(690,60,38,0,Math.PI*2); ctx.fill();
+
+  // clouds
+  ctx.fillStyle = 'rgba(255,255,255,0.85)';
+  [[90,55,1],[250,40,0.8],[430,70,1.1],[600,35,0.7]].forEach(([cx,cy,s])=>{
+    ctx.beginPath();
+    ctx.ellipse(cx,cy,26*s,12*s,0,0,Math.PI*2);
+    ctx.ellipse(cx+22*s,cy+4,18*s,10*s,0,0,Math.PI*2);
+    ctx.ellipse(cx-22*s,cy+4,18*s,10*s,0,0,Math.PI*2);
+    ctx.fill();
+  });
+
+  // distant mountains
+  ctx.fillStyle = 'rgba(150,140,200,0.45)';
+  ctx.beginPath();
+  ctx.moveTo(0,GROUND-40);
+  ctx.lineTo(90,GROUND-110); ctx.lineTo(180,GROUND-50);
+  ctx.lineTo(300,GROUND-130); ctx.lineTo(420,GROUND-55);
+  ctx.lineTo(560,GROUND-100); ctx.lineTo(680,GROUND-45);
+  ctx.lineTo(800,GROUND-90); ctx.lineTo(800,GROUND); ctx.lineTo(0,GROUND);
+  ctx.fill();
+
+  const bc = BOSSES[level].color;
+
+  // grass ground
+  const grassGrad = ctx.createLinearGradient(0,GROUND,0,400);
+  grassGrad.addColorStop(0, '#7fd858');
+  grassGrad.addColorStop(1, '#3f9e3a');
+  ctx.fillStyle = grassGrad;
+  ctx.fillRect(0,GROUND,800,400-GROUND);
+
+  // grass blade texture
+  ctx.strokeStyle = 'rgba(30,90,30,0.5)';
+  ctx.lineWidth = 2;
+  for(let i=0;i<70;i++){
+    const gx = (i*37) % 800;
+    const gy = GROUND + 4 + ((i*13)%40);
+    ctx.beginPath();
+    ctx.moveTo(gx,gy);
+    ctx.lineTo(gx-3,gy-8);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(gx,gy);
+    ctx.lineTo(gx+3,gy-7);
+    ctx.stroke();
+  }
+
+  // arena line glowing in boss color
+  ctx.strokeStyle = bc;
+  ctx.globalAlpha=0.6;
+  ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(0,GROUND); ctx.lineTo(800,GROUND); ctx.stroke();
+  ctx.globalAlpha=1;
+
+  drawFighter(player);
+  drawFighter(boss);
+  drawParticles();
+
+  drawBar(20,20,260,18, player.hp/player.maxHp, '#4dff88', CHARACTERS[playerIdx].name);
+  drawBar(20,44,260,10, player.meter/100, '#ffea00', 'special');
+  drawBar(520,20,260,18, boss.hp/boss.maxHp, '#ff5566', BOSSES[level].name);
+
+  if (player.hp<=0){ endFight(false); return; }
+  if (boss.hp<=0){ endFight(true); return; }
+
+  requestAnimationFrame(loop);
+}
+</script>
+</body>
+</html>
